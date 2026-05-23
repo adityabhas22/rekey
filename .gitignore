@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Build / dist
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual env
+.venv/
+venv/
+ENV/
+
+# uv
+.uv/
+# uv.lock is committed for reproducible installs (rekey is an app, not a library).
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Env files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+*.env
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*~
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project runtime
+.rekey/
+audit-*.json
+rotation-*.log
+*.log
