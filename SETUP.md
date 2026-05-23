@@ -147,6 +147,46 @@ What happens:
 
 ---
 
+## (Optional) Enable automatic OTP capture
+
+v0.2 races multiple OTP channels in parallel — first match wins. You can enable any combination of these. Without any of them, you'll just see `pause_for_human` prompts in the dashboard and complete OTP steps by hand.
+
+### TOTP from your password manager (highest priority, zero setup if you have it)
+
+If a credential has a TOTP secret stored in 1Password or Bitwarden, rekey can generate the 6-digit code locally — no email, no SMS, no internet round-trip. Already wired automatically; nothing extra to do.
+
+### SMS / iMessage codes via macOS Continuity (`chat.db`)
+
+If your iPhone forwards SMS to your Mac (Messages app → Settings → "Text Message Forwarding" enabled for this Mac), rekey can read codes from `~/Library/Messages/chat.db` within seconds.
+
+**One-time permission:** System Settings → Privacy & Security → **Full Disk Access** → click **+** → navigate to `/Users/<you>/ideas/rekey/.venv/bin/python` (or your Terminal binary). Restart your shell after granting.
+
+Verify:
+```bash
+uv run python -c "from rekey.adapters.messages.chat_db import ChatDbReader; print('available:', ChatDbReader().available())"
+```
+
+### Apple Mail.app rule (provider-agnostic email push)
+
+Works for iCloud Mail, Gmail, Outlook, Fastmail — whatever you have configured in Mail.app. Sub-2-second push notification of new emails to rekey via `localhost`.
+
+**One-time setup:**
+
+1. Open **Mail.app** → menu **Mail** → **Settings** → **Rules** → **Add Rule**.
+2. Description: `rekey OTP forwarder`.
+3. **If**: `Every Message`.
+4. Add action: **Run AppleScript** → click **Open in Finder…** → choose `docs/scripts/rekey-mail-handler.applescript` from this repo.
+5. Save. Mail will install the script at `~/Library/Application Scripts/com.apple.mail/`.
+6. When prompted, **Apply to existing messages? → No** (we only want new mail).
+
+The script POSTs each incoming message to `http://127.0.0.1:7777/mail-event`, which rekey's dashboard listens on while a rotation is active. When rekey isn't running, the POST silently fails — Mail keeps the email; nothing else happens.
+
+### Webmail-tab scrape (fallback only)
+
+If none of the above are set up, rekey will open Gmail in a new tab in your Brave/Chrome and try to scrape recent messages. This only works if you're signed into Gmail in that browser, and it's brittle. Use as a last resort.
+
+---
+
 ## Summary checklist
 
 You're ready when you have:
