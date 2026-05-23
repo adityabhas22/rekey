@@ -104,7 +104,7 @@ async def _run_rotation(target: str) -> None:
     _try_open_browser(deps.dashboard.url)
 
     try:
-        attempt = await deps.rotation_service.rotate(credential, current_password)
+        attempt = await deps.state_machine.run(credential, current_password)
     finally:
         server_task.cancel()
         try:

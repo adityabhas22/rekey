@@ -9,7 +9,8 @@ challenges, and reports success/failure.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from rekey.adapters.browser.actions import (
     WrongOriginError,
@@ -20,10 +21,9 @@ from rekey.adapters.browser.secret_store import SecretStore
 from rekey.domain.credential import Credential
 from rekey.ports.handoff import HandoffUI
 from rekey.ports.llm import LLMFactory
-from rekey.ports.otp import OTPFetcher
 
 if TYPE_CHECKING:
-    pass
+    from rekey.ports.otp import OTPFetcher  # noqa: F401  used in OTPFetcherFactory alias
 
 logger = logging.getLogger(__name__)
 
@@ -34,50 +34,90 @@ Change the password for {host} (account: {username}).
 The credential_id you MUST pass to every secret-typing action is:
     {credential_id}
 
-Step-by-step:
+The credential currently stored in the vault may or may not have the correct
+CURRENT password. Use this decision tree.
 
-1. Try GET {origin}/.well-known/change-password — this standard URL often
-   redirects directly to the change-password form. If it doesn't, navigate
-   to {origin} and find the account/settings/security/password section.
+═══ PATH A — In-session change (try this first) ═══
 
-2. Once on the change-password form:
-   - Click the CURRENT PASSWORD input to focus it, then call
-     type_current_password(credential_id="{credential_id}", element_index=N)
-     where N is the element index of the focused input.
-   - Click the NEW PASSWORD input and call
-     type_new_password(credential_id="{credential_id}", element_index=N)
-   - Do the same for any CONFIRM NEW PASSWORD input.
-   - Submit the form.
+A1. Try GET {origin}/.well-known/change-password — this often redirects
+    directly to the change-password form.
+A2. If that fails or you land on a login page, navigate to {origin} and
+    find the account/settings/security/password section.
 
-3. If the site asks for an email OTP after submitting:
-   - Click the OTP input field, then call
-     fetch_and_type_email_otp(sender_hint="{host}", element_index=N).
+A3. If you reach a LOGIN form (the site requires you to log in first):
+    - Type the email "{username}" into the email/username field using
+      the standard `input` action.
+    - Focus the password field, then call
+      type_current_password(credential_id="{credential_id}", element_index=N).
+    - Submit.
+    - If the site says "Incorrect password" / "Wrong password" / similar:
+      ↓ ABANDON PATH A. Switch to PATH B (forgot-password).
 
-4. For ANY of these — STOP and call pause_for_human(...) instead:
-   - CAPTCHA challenge
-   - SMS 2FA code
-   - Push notification (touch your phone)
-   - Hardware key prompt
-   - Account locked / suspicious activity warning
-   - The page navigated to an unfamiliar origin
-   - You're not confident about what to click
+A4. If you reach the CHANGE-PASSWORD form (you are logged in):
+    - Focus the CURRENT password field → type_current_password(...).
+    - Focus the NEW password field → type_new_password(...).
+    - Focus any CONFIRM NEW PASSWORD field → type_new_password(...) again.
+    - Submit.
+    - If the site says "Incorrect current password" / similar:
+      ↓ ABANDON PATH A. Switch to PATH B.
 
-5. After submitting, verify on the page that the change succeeded —
-   look for a clear success message. Report success/failure in your final
-   answer.
+═══ PATH B — Forgot-password flow ═══
 
-RULES:
-- NEVER request, type, or display the password values yourself. The custom
-  actions handle them; the values are not in your context.
+Use this whenever PATH A is blocked (wrong current password, no in-session
+change form, or login keeps failing).
+
+B1. Find and navigate to a "Forgot password?" / "Reset password" link.
+    - Often at {origin}/forgot, {origin}/forgot-password, or via the
+      login page's "Forgot password?" link.
+B2. Enter the email "{username}" in the reset form. Submit.
+B3. The site will email a verification code OR a reset link.
+    - For an OTP code: focus the code input on the page, then call
+      fetch_and_type_email_otp(sender_hint="{host}", element_index=N).
+      This opens Gmail, finds the code, and types it for you.
+      If it returns "timeout", call pause_for_human asking the user to
+      type the code manually.
+    - For a reset link only (no inline code): call pause_for_human
+      asking the user to click the link in their email.
+B4. Once authorized, you'll see a NEW-PASSWORD form.
+    - Focus the new-password field → type_new_password(credential_id=...).
+    - Focus the confirm field (if any) → type_new_password(...).
+    - Submit.
+
+═══ FOR ANY OF THESE — STOP and call pause_for_human ═══
+
+- CAPTCHA challenge
+- SMS 2FA code (not email — SMS goes to phone, only the human can type it)
+- Push notification (touch your phone)
+- Hardware key prompt
+- Account locked / suspicious activity warning / "too many attempts"
+- The page navigated to an unfamiliar origin (not {host} or a Google OAuth subdomain)
+- You're not confident about what to click
+
+═══ RULES — read carefully ═══
+
+- NEVER request, type, or display the password values yourself. The
+  custom actions handle them; the values are not in your context.
 - If the page navigates to an unexpected origin, STOP — call pause_for_human.
-- Do NOT retry the same submission multiple times — this can lock the account.
-- Treat 'account locked' / 'suspended' / 'too many attempts' as fatal — do
-  not try alternate flows.
+- Do NOT retry the same submission multiple times — that can lock the account.
+- Treat 'account locked' / 'suspended' / 'too many attempts' as fatal — STOP.
+- After submitting, verify on the page that the change succeeded.
+  Look for a clear success message. Report success or failure in your
+  final answer.
 """
 
 
+OTPFetcherFactory = Callable[[Any], "OTPFetcher | None"]
+
+
 class BrowserUseRotationDriver:
-    """A :class:`RotationDriver` implementation backed by browser-use."""
+    """A :class:`RotationDriver` implementation backed by browser-use.
+
+    ``otp_fetcher_factory`` (optional) is a callable that takes the live
+    ``browser_session`` and returns an OTPFetcher — used so e.g. the
+    Webmail-tab fetcher can share the agent's browser session for tab
+    management. If ``None``, OTP automation is disabled and the LLM will
+    fall back to ``pause_for_human`` for email codes.
+    """
 
     def __init__(
         self,
@@ -85,33 +125,37 @@ class BrowserUseRotationDriver:
         llm_factory: LLMFactory,
         chrome_session: ChromeCDPSession,
         secrets: SecretStore,
-        otp_fetcher: OTPFetcher | None = None,
+        otp_fetcher_factory: OTPFetcherFactory | None = None,
         handoff: HandoffUI | None = None,
     ) -> None:
         self._llm_factory = llm_factory
         self._chrome = chrome_session
         self._secrets = secrets
-        self._otp_fetcher = otp_fetcher
+        self._otp_fetcher_factory = otp_fetcher_factory
         self._handoff = handoff
 
     async def rotate(
         self,
         credential: Credential,
-        new_password: str,
+        new_password: str,   # noqa: ARG002  staged in SecretStore by service; driver reads via actions
     ) -> bool:
         """Drive the rotation end-to-end on the live site.
 
-        Returns True on confirmed success. Raises :class:`LockoutDetected` if
-        the agent detects an account-lockout / step-up barrier.
+        Returns True on confirmed success. The ``new_password`` argument is
+        kept for the port contract; the driver reads it indirectly via the
+        :class:`SecretStore` (populated by :class:`RotationService` before
+        calling here).
         """
         from browser_use import Agent
 
         browser = await self._chrome.open()
+        otp_fetcher = self._otp_fetcher_factory(browser) if self._otp_fetcher_factory else None
+
         controller = build_controller(
             secrets=self._secrets,
-            otp_fetcher=self._otp_fetcher,
+            otp_fetcher=otp_fetcher,
             handoff=self._handoff,
-            attempt_id=credential.composite_id,   # serves as a stable per-rotation label
+            attempt_id=credential.composite_id,   # stable per-rotation label
             site_label=credential.host,
         )
         llm = self._llm_factory.make()

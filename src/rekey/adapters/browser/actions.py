@@ -43,6 +43,37 @@ async def verify_origin(browser_session: "BrowserSession", expected: str) -> Non
         )
 
 
+async def _type_secret_into_element(
+    *,
+    browser_session,    # noqa: ANN001  browser-use BrowserSession (avoid string forward ref)
+    element_index: int,
+    value: str,
+    sensitive_label: str,
+) -> str:
+    """Type ``value`` into the element at ``element_index`` via browser-use's
+    ``TypeTextEvent``, which dispatches real keystrokes via CDP.
+
+    ``is_sensitive=True`` + ``sensitive_key_name`` make browser-use log the
+    typed value as ``<label>`` rather than the actual content.
+    """
+    from browser_use.browser.events import TypeTextEvent
+
+    node = await browser_session.get_element_by_index(element_index)
+    if node is None:
+        return f"no element at index {element_index}"
+    event = browser_session.event_bus.dispatch(
+        TypeTextEvent(
+            node=node,
+            text=value,
+            clear=True,
+            is_sensitive=True,
+            sensitive_key_name=sensitive_label,
+        )
+    )
+    await event
+    return "filled"
+
+
 def build_controller(
     *,
     secrets: SecretStore,
@@ -69,16 +100,16 @@ def build_controller(
     async def type_current_password(
         credential_id: str,
         element_index: int,
-        browser_session: "BrowserSession",
+        browser_session,   # noqa: ANN001 — auto-injected by browser-use; no annotation
     ) -> str:
         rec = secrets.get(credential_id)
         await verify_origin(browser_session, rec.expected_origin)
-        element = await browser_session.get_element_by_index(element_index)
-        if element is None:
-            return f"no element at index {element_index}"
-        await element.fill(rec.current_password)
-        logger.info("Filled current password for %s", credential_id)
-        return "filled"
+        return await _type_secret_into_element(
+            browser_session=browser_session,
+            element_index=element_index,
+            value=rec.current_password,
+            sensitive_label="<current_password>",
+        )
 
     @controller.action(
         "Type the newly-generated NEW password into the element at the given "
@@ -88,16 +119,16 @@ def build_controller(
     async def type_new_password(
         credential_id: str,
         element_index: int,
-        browser_session: "BrowserSession",
+        browser_session,   # noqa: ANN001
     ) -> str:
         rec = secrets.get(credential_id)
         await verify_origin(browser_session, rec.expected_origin)
-        element = await browser_session.get_element_by_index(element_index)
-        if element is None:
-            return f"no element at index {element_index}"
-        await element.fill(rec.new_password)
-        logger.info("Filled new password for %s", credential_id)
-        return "filled"
+        return await _type_secret_into_element(
+            browser_session=browser_session,
+            element_index=element_index,
+            value=rec.new_password,
+            sensitive_label="<new_password>",
+        )
 
     if otp_fetcher is not None:
         @controller.action(
@@ -108,7 +139,7 @@ def build_controller(
         async def fetch_and_type_email_otp(
             sender_hint: str,
             element_index: int,
-            browser_session: "BrowserSession",
+            browser_session,   # noqa: ANN001
             window_seconds: int = 120,
         ) -> str:
             code = await otp_fetcher.fetch_code(
@@ -117,11 +148,12 @@ def build_controller(
             )
             if code is None:
                 return "timeout"
-            element = await browser_session.get_element_by_index(element_index)
-            if element is None:
-                return f"no element at index {element_index}"
-            await element.fill(code)
-            return "filled"
+            return await _type_secret_into_element(
+                browser_session=browser_session,
+                element_index=element_index,
+                value=code,
+                sensitive_label="<otp_code>",
+            )
 
     if handoff is not None:
         @controller.action(
