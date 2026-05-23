@@ -10,8 +10,13 @@ import webbrowser
 from pathlib import Path
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
+
+# Load .env into os.environ on import so OP_SERVICE_ACCOUNT_TOKEN, BW_SESSION,
+# API keys, etc. work without the user having to `source` them.
+load_dotenv()
 
 from rekey.composition import (
     NoVaultsConfigured,
