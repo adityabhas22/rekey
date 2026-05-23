@@ -21,7 +21,11 @@ from rekey.adapters.browser.actions import WrongOriginError, verify_origin
         ("https://github.com", "https://github.com", True),
         ("https://GitHub.com/login", "https://github.com", True),     # canonicalized
         ("https://evil.com/?ref=github.com", "https://github.com", False),
-        ("https://api.github.com", "https://github.com", False),       # subdomain mismatch
+        # Same registrable domain is now accepted (Fitbit reset link case):
+        ("https://api.github.com", "https://github.com", True),
+        ("https://www.fitbit.com/passwordReset", "https://accounts.fitbit.com", True),
+        # Different parent domain still rejected:
+        ("https://github.com.evil.com", "https://github.com", False),
         ("", "https://github.com", False),
     ],
 )

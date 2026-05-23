@@ -32,15 +32,43 @@ class WrongOriginError(Exception):
 
 
 async def verify_origin(browser_session: "BrowserSession", expected: str) -> None:
-    """Raise :class:`WrongOriginError` if the current page isn't on ``expected``."""
+    """Raise :class:`WrongOriginError` if the current page isn't on the
+    expected site's registrable domain.
+
+    Accepts same-registrable-domain matches (so a reset link served from
+    ``www.fitbit.com`` is accepted for a credential whose stored origin is
+    ``accounts.fitbit.com``). Naive last-two-labels check; for
+    ``foo.co.uk``-style TLDs we'd want a public-suffix list. Good enough
+    for the common case.
+    """
     current_url = await browser_session.get_current_page_url()
     if not current_url:
         raise WrongOriginError("could not determine current page URL")
     current = canonical_origin(current_url)
-    if current != expected:
-        raise WrongOriginError(
-            f"refusing to type secret: page is at {current}, expected {expected}"
-        )
+    if current == expected:
+        return
+    if _same_registrable_domain(current, expected):
+        return
+    raise WrongOriginError(
+        f"refusing to type secret: page is at {current}, expected {expected}"
+    )
+
+
+def _same_registrable_domain(origin_a: str, origin_b: str) -> bool:
+    """Naive registrable-domain match — same last two labels.
+
+    https://accounts.fitbit.com vs https://www.fitbit.com → True
+    https://accounts.fitbit.com vs https://attacker.fitbit.com → True (intentional)
+    https://accounts.fitbit.com vs https://fitbit.com.evil.com → False
+    """
+    from urllib.parse import urlparse
+
+    def labels(url: str) -> tuple[str, ...]:
+        host = (urlparse(url).hostname or "").lower()
+        parts = tuple(p for p in host.split(".") if p)
+        return parts[-2:] if len(parts) >= 2 else parts
+
+    return bool(labels(origin_a)) and labels(origin_a) == labels(origin_b)
 
 
 async def _type_secret_into_element(
