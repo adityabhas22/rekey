@@ -155,6 +155,38 @@ def build_controller(
                 sensitive_label="<otp_code>",
             )
 
+        @controller.action(
+            "Wait for a password-reset email containing a clickable link, "
+            "extract the link, and navigate the current tab to it. Use this "
+            "when the site shows 'check your email for a link' rather than "
+            "asking for an OTP code on-page. Returns 'navigated' on success "
+            "or 'timeout' if no email arrived in window_seconds."
+        )
+        async def fetch_and_open_reset_link(
+            sender_hint: str,
+            browser_session,   # noqa: ANN001
+            window_seconds: int = 180,
+        ) -> str:
+            fetch_link = getattr(otp_fetcher, "fetch_link", None)
+            if not callable(fetch_link):
+                return "no_link_channel"
+            link = await fetch_link(
+                sender_hint=sender_hint or None,
+                window_seconds=window_seconds,
+            )
+            if link is None:
+                return "timeout"
+            # Navigate the current tab to the link.
+            page = await browser_session.get_current_page()
+            if page is None:
+                return "no_active_page"
+            try:
+                await page.navigate(link)
+            except Exception as e:  # noqa: BLE001  surface as failure string
+                return f"navigation_failed: {type(e).__name__}"
+            logger.info("Navigated to reset link from email (length=%d)", len(link))
+            return "navigated"
+
     if handoff is not None:
         @controller.action(
             "Pause and ask the human user. Use for CAPTCHAs, SMS 2FA, push 2FA "

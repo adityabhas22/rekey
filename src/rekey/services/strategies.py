@@ -226,14 +226,28 @@ Steps:
    - {origin}/account/recover
    - {origin}/login (then click "Forgot password?")
 2. Enter "{username}" in the email/identifier field. Submit.
-3. The site will email an OTP code or a reset link. EITHER:
-   - For an OTP code: focus the code input, then call
-     fetch_and_type_email_otp(sender_hint="{host}", element_index=N).
-     If it returns "timeout", call pause_for_human asking the user to
-     type the code manually from their email.
-   - For a reset link: call pause_for_human asking the user to click
-     the link in their email.
-4. Once authorized, you'll see a NEW PASSWORD form.
+3. The site will email EITHER a verification code (entered on this page)
+   OR a clickable reset LINK (the user lands on a set-new-password page).
+   Choose the branch based on what THIS page shows:
+
+   (a) PAGE HAS AN OTP/CODE INPUT VISIBLE NOW (e.g. "Enter the 6-digit
+       code we just emailed you"):
+       - Focus that code input, then call
+         fetch_and_type_email_otp(sender_hint="{host}", element_index=N).
+       - If it returns "timeout", call pause_for_human asking the user
+         to read the code from their email and type it on this page.
+
+   (b) PAGE SAYS "WE EMAILED YOU A LINK" / "CHECK YOUR EMAIL" with NO
+       code input visible:
+       - Call fetch_and_open_reset_link(sender_hint="{host}").
+         This automatically waits for the reset email, extracts the link,
+         and navigates THIS tab to the reset page.
+       - If it returns "timeout", call pause_for_human asking the user
+         to click the link in their email.
+       - On "navigated", continue at step 4.
+
+4. Once authorized (after OTP success or after the reset link navigated),
+   you'll see a NEW PASSWORD form.
    - Focus new-password → type_new_password(credential_id="{credential_id}", element_index=N).
    - Focus confirm-new-password (if present) → type_new_password(...).
 5. Submit ONCE.
