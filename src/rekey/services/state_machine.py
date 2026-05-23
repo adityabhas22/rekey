@@ -100,19 +100,7 @@ class RotationStateMachine:
         )
 
         try:
-            browser = await self._chrome.open()
             llm = self._llm_factory.make()
-            otp_fetcher = self._otp_factory(browser) if self._otp_factory else None
-
-            ctx = StrategyContext(
-                browser_session=browser,
-                llm=llm,
-                secrets=self._secrets,
-                handoff=self._handoff,
-                otp_fetcher=otp_fetcher,
-                attempt_id=attempt.attempt_id,
-                site_label=credential.host,
-            )
 
             for strategy in self._strategies:
                 await self._emit(
@@ -122,7 +110,34 @@ class RotationStateMachine:
                     strategy=strategy.name,
                 )
 
-                result = await strategy.execute(credential, new_password, ctx)
+                # IMPORTANT: each strategy gets a *fresh* Browser handle.
+                # browser-use resets its event-bus + watchdogs at the end of
+                # every Agent.run(), so reusing one Browser across strategies
+                # leaves later runs unable to handle BrowserStateRequestEvent.
+                from browser_use import Browser
+
+                fresh_browser = Browser(cdp_url=self._cdp_url)
+                otp_fetcher = (
+                    self._otp_factory(fresh_browser) if self._otp_factory else None
+                )
+
+                ctx = StrategyContext(
+                    browser_session=fresh_browser,
+                    llm=llm,
+                    secrets=self._secrets,
+                    handoff=self._handoff,
+                    otp_fetcher=otp_fetcher,
+                    attempt_id=attempt.attempt_id,
+                    site_label=credential.host,
+                )
+
+                try:
+                    result = await strategy.execute(credential, new_password, ctx)
+                finally:
+                    try:
+                        await fresh_browser.close()
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug("fresh_browser.close raised: %s", e)
                 attempt.events[-1].data.update({"strategy_result": result.outcome.value})
 
                 if result.outcome == StrategyOutcome.LOCKOUT:
