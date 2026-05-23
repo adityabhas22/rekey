@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from pathlib import Path
+
 from rekey.adapters.browser.chrome_cdp import ChromeCDPSession
 from rekey.adapters.browser.secret_store import RotationSecrets, SecretStore
 from rekey.domain.credential import Credential
@@ -30,6 +32,7 @@ from rekey.ports.event_bus import EventBus
 from rekey.ports.handoff import HandoffUI
 from rekey.ports.llm import LLMFactory
 from rekey.ports.vault import VaultWriter
+from rekey.services.event_logger import JSONLinesEventLogger
 from rekey.services.password_generator import generate_password
 from rekey.services.strategies import (
     ForgotPasswordStrategy,
@@ -64,6 +67,7 @@ class RotationStateMachine:
         strategies: Sequence[RotationStrategy] | None = None,
         cdp_url: str = "http://127.0.0.1:9222",
         password_policy: PasswordPolicy | None = None,
+        runs_dir: Path | None = None,
     ) -> None:
         self._chrome = chrome_session
         self._llm_factory = llm_factory
@@ -79,6 +83,7 @@ class RotationStateMachine:
             ForgotPasswordStrategy(),
             ManualHandoffStrategy(),
         )
+        self._runs_dir = runs_dir or (Path.home() / ".rekey" / "runs")
 
     async def run(
         self,
@@ -87,6 +92,17 @@ class RotationStateMachine:
     ) -> RotationAttempt:
         """Run the full rotation. Returns the final attempt state."""
         attempt = RotationAttempt(credential_id=credential.composite_id)
+
+        # Attach a per-run JSONL event logger before the first emit, so the
+        # whole timeline is captured. Path: ~/.rekey/runs/<attempt_id>.jsonl.
+        event_log = JSONLinesEventLogger(
+            path=self._runs_dir / f"{attempt.attempt_id}.jsonl",
+        )
+        event_log.attach(self._event_bus)
+        # Give the logger task a tick to subscribe before we publish.
+        import asyncio as _asyncio  # local — top of module already imports asyncio
+        await _asyncio.sleep(0)
+
         await self._emit(attempt, State.PENDING, f"starting rotation for {credential.host}")
 
         new_password = generate_password(self._policy)
@@ -191,6 +207,7 @@ class RotationStateMachine:
             return attempt
         finally:
             self._secrets.clear(credential.composite_id)
+            await event_log.close()
 
     # ------------------------------------------------------------------- helpers
 
